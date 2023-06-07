@@ -1,13 +1,13 @@
-from flask import Blueprint, jsonify, request
-from app.models import Pokemon
+from flask import Blueprint, jsonify, request, url_for
+from app.models import Pokemon, pokemons_schema
 import requests
 from datetime import datetime as dt, timezone
 from app import db, app
-from sqlalchemy import delete
+from sqlalchemy import exists
 from sqlalchemy.dialects.postgresql import insert
 
 
-pokemonapi = Blueprint("pokemonapi", __name__, url_prefix="/api/pokemon")
+pokemonapi = Blueprint("pokemonapi", __name__, url_prefix="/api/v1")
 
 
 class PokemonException(Exception):
@@ -22,7 +22,7 @@ def handle_scheduler_exception(e):
     return {"success": False, "error": e.message}, e.code
 
 
-@pokemonapi.route("/fetchpokemon/")
+@pokemonapi.route("/syncpokemons/")
 def fetchpokemon():
     url = "https://coralvanda.github.io/pokemon_data.json"
     response = requests.get(url)
@@ -30,9 +30,9 @@ def fetchpokemon():
     for pokemon in data:
         existing_pokemon = Pokemon.query.filter_by(name=pokemon["Name"]).first()
         if existing_pokemon:
-            return "Pokemon data already present"
+            raise PokemonException(f"Pokemon data already present")
         new_pokemon = Pokemon(
-            id=pokemon["#"],
+            rank=pokemon["#"],
             name=pokemon["Name"],
             type1=pokemon["Type 1"],
             type2=pokemon["Type 2"],
@@ -51,16 +51,19 @@ def fetchpokemon():
     return "Data stored successfully!"
 
 
+@pokemonapi.route("/pokemons/", methods=["GET"])
 @pokemonapi.route("/pokemons/<int:id>/", methods=["GET"])
 def get_pokemon(id=None):
     now = dt.now(timezone.utc)
     pokemons = Pokemon.query
-    limit = int(request.args.get("limit", app.config.get("PAGE_LIMIT")))
+    limit = request.args.get("limit", app.config.get("PAGE_LIMIT"), type=int)
     sort = request.args.get("sort", "id")  # Default sorting on Pokemon ID
     order = request.args.get("order", "asc")
     page_num = request.args.get("page", 1, type=int)
     search = request.args.get("search")
-    generation = request.args.get("generation")
+    type1 = request.args.get("type1")
+    type2 = request.args.get("type2")
+    generation = request.args.get("generation", 1, type=int)
     legendary = request.args.get("legendary")
 
     if id:
@@ -70,38 +73,58 @@ def get_pokemon(id=None):
         search_query = f"%{search}%"
         pokemons = pokemons.filter(Pokemon.name.ilike(search_query))
 
-    if generation:
-        pokemons = pokemons.filter(Pokemon.generation == generation)
-
     if legendary:
         legendary = legendary.lower() == "true"
         pokemons = pokemons.filter(Pokemon.legendary == legendary)
 
-    pokemons = pokemons.order_by(getattr(getattr(Pokemon, sort), order)())
-    pokemons = pokemons.paginate(page=page_num, per_page=limit, error_out=False)
-    allpokemon = pokemons.items
+    if type1:
+        pokemons = pokemons.filter(Pokemon.type1 == type1)
 
+    if type2:
+        pokemons = pokemons.filter(Pokemon.type2 == type2)
+
+    if generation:
+        pokemons = pokemons.filter(Pokemon.generation == generation)
+
+    if not pokemons:
+        raise PokemonException(f"Pokemon not found")
+
+    pokemons = pokemons.order_by(getattr(getattr(Pokemon, sort), order)())
+    allpokemons = pokemons.paginate(page=page_num, per_page=limit, error_out=False)
+
+    if allpokemons.has_next:
+        next_url = url_for(
+            "pokemonapi.get_pokemon", page=allpokemons.next_num, _external=True
+        )
+    else:
+        next_url = None
     return {
         "success": True,
-        "pokemons": allpokemon,
+        "pokemons": pokemons_schema.dump(allpokemons.items),
         "timestamp": now,
-        "currentPage": pokemons.page,
-        "totalPages": pokemons.pages,
-        "totalCount": pokemons.total,
+        "currentPage": allpokemons.page,
+        "totalPages": allpokemons.pages,
+        "totalCount": allpokemons.total,
+        "next_page": next_url,
         "message": "Pokemon retrieved successfully.",
-    }
+    }, 200
 
 
-@pokemonapi.route("/pokemon/", methods=["POST"])
+@pokemonapi.route("/pokemons/", methods=["POST"])
 def bulk_insert_pokemon():
     pokemon_data = request.get_json()
     try:
         pokemon_records = []
         for data in pokemon_data:
+            name = data.get("name").capitalize()
+
+            # Check if the name already exists in the database
+            if db.session.query(exists().where(Pokemon.name == name)).scalar():
+                continue
             pokemon_records.append(
                 {
-                    "id": data.get("id"),
-                    "name": data.get("name").capitalize(),
+                    "rank": data.get("rank"),
+                    "name": name,
                     "type1": data.get("type1").capitalize(),
                     "type2": data.get("type2").capitalize(),
                     "total": data.get("total"),
@@ -116,110 +139,90 @@ def bulk_insert_pokemon():
                 }
             )
 
-        statement = insert(Pokemon).values(pokemon_records)
-        statement = statement.on_conflict_do_nothing()
-        db.session.execute(statement)
+        save = insert(Pokemon).values(pokemon_records)
+        save = save.on_conflict_do_nothing()
+        db.session.execute(save)
         db.session.commit()
-        return jsonify(
-            {"success": True, "message": f"{len(pokemon_records)} records Inserted"}
+        return (
+            jsonify(
+                {"success": True, "message": f"{len(pokemon_records)} records Inserted"}
+            ),
+            200,
         )
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-@pokemonapi.route("/pokemon/", methods=["PUT"])
+@pokemonapi.route("/pokemons/", methods=["PUT"])
 def upsert_pokemon():
-    pokemon_data = request.get_json()
-    try:
-        for record in pokemon_data:
-            if "name" in record:
-                record["name"] = record["name"].capitalize()
-            if "type1" in record and record["type1"] is not None:
-                record["type1"] = record["type1"].capitalize()
-            if "type2" in record and record["type2"] is not None:
-                record["type2"] = record["type2"].capitalize()
+    pokemon_datas = request.get_json()
+    pokemon_list = []
 
-        save = insert(Pokemon).values(pokemon_data)
+    for pokemon_data in pokemon_datas:
+        name = pokemon_data.get("name")
+        type1 = pokemon_data.get("type1")
+        type2 = pokemon_data.get("type2")
+        pokemon_values = {
+            "name": name.capitalize(),
+            "rank": pokemon_data.get("rank"),
+            "type1": type1.capitalize(),
+            "type2": type2.capitalize(),
+            "total": pokemon_data.get("total"),
+            "hp": pokemon_data.get("hp"),
+            "attack": pokemon_data.get("attack"),
+            "defense": pokemon_data.get("defense"),
+            "sp_atk": pokemon_data.get("sp_atk"),
+            "sp_def": pokemon_data.get("sp_def"),
+            "speed": pokemon_data.get("speed"),
+            "generation": pokemon_data.get("generation"),
+            "legendary": pokemon_data.get("legendary"),
+        }
+        pokemon_list.append(pokemon_values)
+    try:
+        save = insert(Pokemon).values(pokemon_list)
         update = save.on_conflict_do_update(
-            constraint="pokemon_pkey", set_=save.excluded
+            index_elements=[Pokemon.name],
+            set_=dict(
+                rank=save.excluded.rank,
+                type1=save.excluded.type1,
+                type2=save.excluded.type2,
+                total=save.excluded.total,
+                hp=save.excluded.hp,
+                attack=save.excluded.attack,
+                defense=save.excluded.defense,
+                sp_atk=save.excluded.sp_atk,
+                sp_def=save.excluded.sp_def,
+                speed=save.excluded.speed,
+                generation=save.excluded.generation,
+                legendary=save.excluded.legendary,
+            ),
         )
 
         db.session.execute(update)
         db.session.commit()
 
-        return jsonify(
-            {"success": True, "message": f"{len(pokemon_data)} records Updated"}
+        return (
+            jsonify(
+                {"success": True, "message": f"{len(pokemon_list)} records Updated"}
+            ),
+            200,
         )
     except Exception as e:
         db.session.rollback()
         return jsonify({"success": False, "error": str(e)}), 500
 
 
-"""{
-        'id': save.excluded.id,
-        'type1':save.excluded.type1,
-        'type2':save.excluded.type2,
-        'total':save.excluded.total,
-        'hp':save.excluded.hp,
-        'attack':save.excluded.attack,
-        'defense':save.excluded.defense,
-        'sp_atk':save.excluded.sp_atk,
-        'sp_def':save.excluded.sp_def,
-        'speed':save.excluded.speed,
-        'generation':save.excluded.generation,
-        'legendary':save.excluded.legendary,
-        }
-    
-@pokeman_api.route("/", methods=["PUT"])
-def upsert():
-    pokemon_datas = request.json.get
-    values = []
-    for pokemon_data in pokemon_datas:
-        pokemon_values = {
-            'name': pokemon_data.get('name'),
-            'rank': pokemon_data.get('rank'),
-            'type1': pokemon_data.get('type1'),
-            'type2': pokemon_data.get('type2'),
-            'total': pokemon_data.get('total'),
-            'hp': pokemon_data.get('hp'),
-            'attack': pokemon_data.get('attack'),
-            'defense': pokemon_data.get('defense'),
-            'sp_atk': pokemon_data.get('sp_atk'),
-            'sp_def': pokemon_data.get('sp_def'),
-            'speed': pokemon_data.get('speed'),
-            'generation': pokemon_data.get('generation'),
-            'legendary': pokemon_data.get('legendary')
-        }
-        values.append(pokemon_values)
-    insert_stmt = insert(Pokemon).values(values)
-    update_stmt = insert_stmt.on_conflict_do_update(
-        index_elements=['name'],
-        set_={
-            'id': insert_stmt.excluded.id,
-            'type1': insert_stmt.excluded.type1,
-            'type2': insert_stmt.excluded.type2,
-            'total': insert_stmt.excluded.total,
-            'hp': insert_stmt.excluded.hp,
-            'attack': insert_stmt.excluded.attack,
-            'defense': insert_stmt.excluded.defense,
-            'sp_atk': insert_stmt.excluded.sp_atk,
-            'sp_def': insert_stmt.excluded.sp_def,
-            'speed': insert_stmt.excluded.speed,
-            'generation': insert_stmt.excluded.generation,
-            'legendary': insert_stmt.excluded.legendary
-        }
-    )
-    db.session.execute(update_stmt)
-    db.session.commit()
-    return {
-            "success": True,
-            "message": "Pokemon updated successfully"
-        }, 200"""
-
-
-@pokemonapi.route("/pokemon/", methods=["DELETE"])
-def delete_pokemon():
+@pokemonapi.route("/pokemons/", methods=["DELETE"])
+@pokemonapi.route("/pokemons/<int:id>", methods=["DELETE"])
+def delete_pokemon(id=None):
+    if id:
+        pokemon = Pokemon.query.get(id)
+        if not pokemon:
+            raise PokemonException(f"Pokemon with ID {id} not found")
+        db.session.delete(pokemon)
+        db.session.commit()
+        return jsonify({"success": True, "message": "Record Deleted"})
     deletePokemon = request.json
     names_to_delete = [name.capitalize() for name in deletePokemon]
     pokemons = Pokemon.query.filter(Pokemon.name.in_(names_to_delete)).delete()
@@ -227,15 +230,9 @@ def delete_pokemon():
     if not pokemons:
         raise PokemonException(f"Pokemon not found {deletePokemon}")
     db.session.commit()
-    return jsonify(
-        {"success": True, "message": f"{len(names_to_delete)} records Deleted"}
+    return (
+        jsonify(
+            {"success": True, "message": f"{len(names_to_delete)} records Deleted"}
+        ),
+        200,
     )
-
-
-@pokemonapi.route("/allpokemon/", methods=["DELETE"])
-def delete_all_pokemon():
-    delete_all = delete(Pokemon)
-    db.session.execute(delete_all)
-    db.session.commit()
-
-    return jsonify({"success": True, "message": "All records deleted"})
