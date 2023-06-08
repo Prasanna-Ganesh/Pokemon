@@ -117,10 +117,6 @@ def bulk_insert_pokemon():
         pokemon_records = []
         for data in pokemon_data:
             name = data.get("name").capitalize()
-
-            # Check if the name already exists in the database
-            if db.session.query(exists().where(Pokemon.name == name)).scalar():
-                continue
             pokemon_records.append(
                 {
                     "rank": data.get("rank"),
