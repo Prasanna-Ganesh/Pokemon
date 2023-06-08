@@ -1,4 +1,7 @@
-DEBUG = True
-SECRET_KEY = "password"
-SQLALCHEMY_DATABASE_URI = "postgresql+psycopg2://postgres:postgres@localhost/pokemon"
-PAGE_LIMIT = 20
+class Config(object):
+    DEBUG = True
+    DEVELOPMENT = True
+    SQLALCHEMY_DATABASE_URI = "postgresql+psycopg2://postgres:postgres@localhost/pokemon"
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    PAGE_LIMIT = 20
+    SECRET_KEY = "password"
