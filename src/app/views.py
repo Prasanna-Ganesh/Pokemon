@@ -3,7 +3,6 @@ from app.models import Pokemon, pokemons_schema
 import requests
 from datetime import datetime as dt, timezone
 from app import db, app
-from sqlalchemy import exists
 from sqlalchemy.dialects.postgresql import insert
 
 
@@ -73,8 +72,12 @@ def get_pokemon(id=None):
         search_query = f"%{search}%"
         pokemons = pokemons.filter(Pokemon.name.ilike(search_query))
 
-    if legendary:
+    if legendary.lower() == "true":
         legendary = legendary.lower() == "true"
+        pokemons = pokemons.filter(Pokemon.legendary == legendary)
+
+    if legendary.lower() == "false":
+        legendary = legendary.lower() == "false"
         pokemons = pokemons.filter(Pokemon.legendary == legendary)
 
     if type1:
