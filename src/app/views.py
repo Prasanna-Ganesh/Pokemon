@@ -72,13 +72,13 @@ def get_pokemon(id=None):
         search_query = f"%{search}%"
         pokemons = pokemons.filter(Pokemon.name.ilike(search_query))
 
-    if legendary.lower() == "true":
-        legendary = legendary.lower() == "true"
-        pokemons = pokemons.filter(Pokemon.legendary == legendary)
-
-    if legendary.lower() == "false":
-        legendary = legendary.lower() == "false"
-        pokemons = pokemons.filter(Pokemon.legendary == legendary)
+    if legendary:
+        if legendary.lower() == "true":
+            legendary = True
+            pokemons = pokemons.filter(Pokemon.legendary == legendary)
+        elif legendary.lower() == "false":
+            legendary = False
+            pokemons = pokemons.filter(Pokemon.legendary == legendary)
 
     if type1:
         pokemons = pokemons.filter(Pokemon.type1 == type1)
