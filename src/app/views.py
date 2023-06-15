@@ -60,8 +60,8 @@ def get_pokemon(id=None):
     order = request.args.get("order", "asc")
     page_num = request.args.get("page", 1, type=int)
     search = request.args.get("search")
-    type1 = request.args.get("type1")
-    type2 = request.args.get("type2")
+    type1s = request.args.get("type1")
+    type2s = request.args.get("type2")
     generation = request.args.get("generation", 1, type=int)
     legendary = request.args.get("legendary")
 
@@ -80,11 +80,11 @@ def get_pokemon(id=None):
             legendary = False
             pokemons = pokemons.filter(Pokemon.legendary == legendary)
 
-    if type1:
-        pokemons = pokemons.filter(Pokemon.type1 == type1)
+    if type1s:
+        pokemons = pokemons.filter(Pokemon.type1.ilike(type1s))
 
-    if type2:
-        pokemons = pokemons.filter(Pokemon.type2 == type2)
+    if type2s:
+        pokemons = pokemons.filter(Pokemon.type2.ilike(type2s))
 
     if generation:
         pokemons = pokemons.filter(Pokemon.generation == generation)
