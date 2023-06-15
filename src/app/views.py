@@ -196,16 +196,15 @@ def add_pokemon(id=None):
 
 def upsertinsert(values):
     try:
-        for value in values:
-            insert_stmt = insert(Pokemon).values(value)
-            update = {col.name: col for col in insert_stmt.excluded if col.name != "id"}
+        insert_stmt = insert(Pokemon).values(values)
+        update = {col.name: col for col in insert_stmt.excluded if col.name != "id"}
 
-            upsert_statement = insert_stmt.on_conflict_do_update(
-                index_elements=[Pokemon.name],
-                set_=update,
-            )
+        upsert_statement = insert_stmt.on_conflict_do_update(
+            index_elements=[Pokemon.name],
+            set_=update,
+        )
 
-            db.session.execute(upsert_statement)
+        db.session.execute(upsert_statement)
         db.session.commit()
 
         return {"success": True, "message": "Records updated."}
