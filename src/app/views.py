@@ -81,10 +81,12 @@ def get_pokemon(id=None):
             pokemons = pokemons.filter(Pokemon.legendary == legendary)
 
     if type1s:
-        pokemons = pokemons.filter(Pokemon.type1.ilike(type1s))
+        search_query = f"%{type1s}%"
+        pokemons = pokemons.filter(Pokemon.type1.ilike(search_query))
 
     if type2s:
-        pokemons = pokemons.filter(Pokemon.type2.ilike(type2s))
+        search_query = f"%{type2s}%"
+        pokemons = pokemons.filter(Pokemon.type2.ilike(search_query))
 
     if generation:
         pokemons = pokemons.filter(Pokemon.generation == generation)
